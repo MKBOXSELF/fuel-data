@@ -4,7 +4,11 @@ on:
   schedule:
     # Esegue ogni 15 minuti
     - cron: '*/15 * * * *'
-  workflow_dispatch: # Permette di avviarlo manualmente
+  workflow_dispatch:
+
+# ✅ PERMESSI DI SCRITTURA ESPLICITI
+permissions:
+  contents: write
 
 jobs:
   update-data:
@@ -16,12 +20,17 @@ jobs:
       - name: Fetch data from Apps Script
         run: |
           curl -L -o stations.json "https://script.google.com/macros/s/AKfycbw_zwZsyeQfpOVyb53X7Hv41Fl4lKzAG2E08rLbhkE53aDBfiG2jIEo53wVQKFwdc6psA/exec"
+          # Verifica che il file sia stato scaricato e non sia vuoto
+          if [ ! -s stations.json ]; then
+            echo "❌ Errore: stations.json è vuoto o non scaricato"
+            exit 1
+          fi
 
       - name: Commit and push if changed
         run: |
+          # ✅ CONFIGURAZIONE GIT OBBLIGATORIA
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add stations.json
-          # Il commit avviene solo se il file è cambiato
           git diff --staged --quiet || git commit -m "data: update stations.json $(date -u +%F)"
           git push
