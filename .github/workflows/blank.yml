@@ -2,13 +2,16 @@ name: Update Fuel Data
 
 on:
   schedule:
-    # Esegue ogni 15 minuti
     - cron: '*/15 * * * *'
   workflow_dispatch:
 
-# ✅ PERMESSI DI SCRITTURA ESPLICITI
 permissions:
   contents: write
+
+# 🔒 Impedisce esecuzioni sovrapposte
+concurrency:
+  group: update-fuel-data
+  cancel-in-progress: false
 
 jobs:
   update-data:
@@ -16,21 +19,69 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Fetch data from Apps Script
         run: |
-          curl -L -o stations.json "https://script.google.com/macros/s/AKfycbw_zwZsyeQfpOVyb53X7Hv41Fl4lKzAG2E08rLbhkE53aDBfiG2jIEo53wVQKFwdc6psA/exec"
-          # Verifica che il file sia stato scaricato e non sia vuoto
+          # 🔄 Aggiunge parametro anti-cache per bypassare eventuali cache intermedie
+          TIMESTAMP=$(date +%s)
+          URL="https://script.google.com/macros/s/AKfycbw_zwZsyeQfpOVyb53X7Hv41Fl4lKzAG2E08rLbhkE53aDBfiG2jIEo53wVQKFwdc6psA/exec?t=${TIMESTAMP}"
+          
+          echo "🌐 Scaricando da: $URL"
+          curl -sSL --max-time 60 -o stations.json "$URL"
+          
+          # ✅ Verifica che il file sia stato scaricato e non sia vuoto
           if [ ! -s stations.json ]; then
             echo "❌ Errore: stations.json è vuoto o non scaricato"
             exit 1
           fi
+          
+          # ✅ Verifica che sia JSON valido (non HTML di errore)
+          if ! head -c 1 stations.json | grep -qE '\[|\{'; then
+            echo "❌ Errore: il file non inizia con '[' o '{' - probabilmente non è JSON valido"
+            echo "📄 Prime righe del file:"
+            head -n 5 stations.json
+            exit 1
+          fi
+          
+          echo "✅ File scaricato: $(wc -c < stations.json) bytes"
+          echo "📄 Prime 200 caratteri:"
+          head -c 200 stations.json
+          echo ""
 
       - name: Commit and push if changed
         run: |
-          # ✅ CONFIGURAZIONE GIT OBBLIGATORIA
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 👀 Mostra lo stato prima del commit
+          echo "📊 Stato del repository:"
+          git status --short
+          
           git add stations.json
-          git diff --staged --quiet || git commit -m "data: update stations.json $(date -u +%F)"
-          git push
+          
+          if git diff --staged --quiet; then
+            echo "ℹ️ Nessuna modifica rilevata in stations.json - il commit NON viene creato"
+          else
+            echo "✅ Modifiche rilevate - creo il commit"
+            git commit -m "data: update stations.json $(date -u +%F_%H:%M)"
+            
+            # 🔁 Retry del push in caso di conflitto (fino a 3 tentativi)
+            for i in 1 2 3; do
+              if git push; then
+                echo "✅ Push completato"
+                break
+              else
+                echo "⚠️ Push fallito (tentativo $i) - pull e riprovo"
+                git pull --rebase origin main
+                sleep 5
+              fi
+            done
+          fi
+
+      - name: Riepilogo finale
+        if: always()
+        run: |
+          echo "🕐 Esecuzione completata: $(date -u)"
+          echo "📁 Dimensione finale: $(wc -c < stations.json) bytes"
